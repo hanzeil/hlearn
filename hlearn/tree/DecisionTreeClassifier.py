@@ -62,10 +62,20 @@ class DecisionTreeClassifier:
 		self.n_features_ = None
 		# tree_ : Tree object
 		# The underlying Tree object
-		self.tree_ = Tree()
+		self.tree_ = None
 		# _random_columns_ : list or None
 		# random select n_features when fit is performed
 		self.__random_columns_ = None
+		# training_samples_ : numpy.ndarray
+		self.training_samples_ = None
+		# targets_ : numpy.ndarray
+		self.targets_ = None
+		# feature_values_ : numpy.ndarray
+		# all feature values of all features
+		self.feature_values_ = None
+		# sample_counts_ : int or None
+		# The number oa samples
+		self.samples_counts_ = None
 		pass
 
 	def fit(self, X, y):
@@ -105,9 +115,12 @@ class DecisionTreeClassifier:
 			self.__random_columns_ = list()
 			for i in range(self.n_features_):
 				self.__random_columns_.append(random.randint(0, features_total - 1))
-			training_samples = X[:, self.__random_columns_]
+			self.training_samples_ = X[:, self.__random_columns_]
 		else:
-			training_samples = X
+			self.training_samples_ = X
+		self.targets_ = y
+		self.samples_counts_ = len(self.training_samples_)
+		# assign the criterion function
 		if self.criterion == 'entropy':
 			criterion_func = DecisionTreeClassifier.__information_gain
 		elif self.criterion == 'gini':
@@ -115,33 +128,69 @@ class DecisionTreeClassifier:
 		else:
 			raise
 		self.feature_importance_ = criterion_func(X, y)
+		# Calculate the inferred value of feature_values
+		self.feature_values_ = list()
+		for i in range(len(self.training_samples_[0])):
+			self.feature_values_.append(set(self.training_samples_[:, i]))
+		self.feature_values_ = numpy.array(self.feature_values_)
+
 		# create a decision tree
-		self.tree_ = Tree(self.create_decision_tree(
-			data=training_samples,
-			target=y,
-			criterion_func=criterion_func,
-		))
+		self.tree_ = Tree(
+			self.create_decision_tree(
+				rows=[i for i in range(self.samples_counts_)],
+				cols=[i for i in range(self.n_features_)],
+				criterion_func=criterion_func,
+			)
+		)
 		return self
 
-	def create_decision_tree(self, data, target, criterion_func, node=None):
+	def create_decision_tree(self, rows, cols, criterion_func):
+		data = self.training_samples_[rows, :]
+		data = data[:, cols]
+		targets = self.targets_[rows]
+		features = self.feature_values_[cols]
 		# if all samples belong to ONE class. Return a leaf node
-		unique_classes = list(set(target))
+		unique_classes = list(set(targets))
 		if len(unique_classes) == 1:
 			return Node(
 				result=unique_classes[0],
 			)
-		print(data)
-		print(set(data[:,0]))
-		if len(data) == 0 :
+		if len(rows) == 0 or DecisionTreeClassifier.__is_single_value(data):
 			# return a leaf node labeled by the class having the most samples
 
 			return Node(
-				result=DecisionTreeClassifier.__get_mode(target),
+				result=DecisionTreeClassifier.__get_mode(targets),
 			)
+		# split a leaf node
 		# select the best attribute to split the node
-		feature_importance = criterion_func(data, target)
+		feature_importance = criterion_func(data, targets)
 		feature_selected = feature_importance.index(max(feature_importance))
-		pass
+		node = Node()
+		node.feature = cols[feature_selected]
+		node.result = None
+		# each value of the feature selected
+		for value in features[feature_selected]:
+			index = list(filter(lambda i: data[i, feature_selected] == value, [i for i in range(len(rows))]))
+			if len(index) == 0:
+				node.add_child(
+					value=value,
+					node=Node(
+						result=DecisionTreeClassifier.__get_mode(targets),
+					)
+				)
+			else:
+				rows_next = [rows[i] for i in index]
+				cols_next = list(cols)
+				del cols_next[feature_selected]
+				node.add_child(
+					value=value,
+					node=self.create_decision_tree(
+						rows=rows_next,
+						cols=cols,
+						criterion_func=criterion_func,
+					)
+				)
+		return node
 
 	@staticmethod
 	def __entropy(data):
@@ -188,6 +237,17 @@ class DecisionTreeClassifier:
 			if value == max_times:
 				return key
 
+	@staticmethod
+	def __is_single_value(data):
+		"""
+		Judge whether each feature only has single value
+		:param data: training data
+		:return: bool
+		"""
+		for i in range(len(data[0])):
+			if len(set(data[:, i])) > 1:
+				return False
+		return True
 
 
 class Tree:
@@ -206,24 +266,44 @@ class Tree:
 class Node:
 	def __init__(self, **kwargs):
 		# The feature to split to subtree
-		self.feature = kwargs.get('feature', None)
+		self.__feature = kwargs.get('feature', None)
 		# saved the target result only in leaf nodes.
-		self.result = kwargs.get('result', None)
+		self.__result = kwargs.get('result', None)
 		# A dict of Node, each value is a subtree when the feature equals the key
-		self.children = kwargs.get('children', None)
+		self.__children = kwargs.get('children', None)
 
-	def add_child(self, node):
+	def add_child(self, value, node):
 		assert isinstance(node, Node)
-		self.children.append(node)
+		if self.__children is None:
+			self.__children = dict()
+		self.__children[value] = node
+
+	@property
+	def feature(self):
+		return self.__feature
+
+	@feature.setter
+	def feature(self, value):
+		assert value is None or isinstance(value, int)
+		self.__feature = value
+
+	@property
+	def result(self):
+		return self.__result
+
+	@result.setter
+	def result(self, value):
+		assert value is None or isinstance(value, int)
+		self.__result = value
 
 
 if __name__ == '__main__':
 	import csv
 
-	rows = csv.reader(open('cdata6.csv'))
+	lines = csv.reader(open('cdata6.csv'))
 	cdata = list()
-	for row in rows:
-		cdata.append(row)
+	for line in lines:
+		cdata.append(line)
 	cdata = numpy.array(cdata)
 	X = numpy.array([[1, 1, 1], [0, 0, 0], [1, 0, 0], [0, 1, 1], [0, 1, 0]])
 	y = numpy.array([1, 0, 0, 1, 1])
